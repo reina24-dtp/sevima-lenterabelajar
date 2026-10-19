@@ -1,9 +1,38 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import confetti from 'canvas-confetti';
-import { ArrowLeft, CheckCircle2, XCircle, Award, RotateCcw, ArrowRight, HelpCircle } from 'lucide-react';
+import { ArrowLeft, CheckCircle2, XCircle, Award, RotateCcw, ArrowRight, HelpCircle, Lock, Loader2 } from 'lucide-react';
+import { loadSubbabContent } from '../contentStore';
 
-export default function QuizEngine({ subjectId, subbabId, subjects, onBackToReader, onFinishQuiz }) {
-  // Find subbab quiz
+function shuffle(values) {
+  const result = [...values];
+  for (let index = result.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(Math.random() * (index + 1));
+    [result[index], result[swapIndex]] = [result[swapIndex], result[index]];
+  }
+  return result;
+}
+
+function prepareQuestions(quiz) {
+  return quiz.map((question) => {
+    const items = question.options.map((opt, idx) => ({
+      text: opt,
+      isCorrect: idx === question.correctAnswer
+    }));
+    const shuffled = shuffle(items);
+    const newCorrectIndex = shuffled.findIndex(item => item.isCorrect);
+
+    return {
+      ...question,
+      options: shuffled.map(item => item.text),
+      correctAnswer: newCorrectIndex
+    };
+  });
+}
+
+export default function QuizEngine({ subjectId, subbabId, userId, subjects, onBackToReader, onFinishQuiz }) {
+  // subjects hanya berisi metadata katalog; soal kuis sungguhan diambil dari
+  // Firestore (dokumen yang sama dengan materi, lihat contentStore.js), dan
+  // hanya berhasil kalau subbab ini sudah pernah diunduh.
   const subject = subjects.find(s => s.id === subjectId) || subjects[0];
   let subbab = null;
   for (const cls of subject.classes) {
@@ -13,13 +42,54 @@ export default function QuizEngine({ subjectId, subbabId, subjects, onBackToRead
     }
   }
 
-  const questions = subbab?.quiz || [];
+  const [questions, setQuestions] = useState(null);
+  const [loadError, setLoadError] = useState(null);
+  const [isLoading, setIsLoading] = useState(true);
 
   const [currentIndex, setCurrentIndex] = useState(0);
   const [selectedOption, setSelectedOption] = useState(null);
   const [isAnswerSubmitted, setIsAnswerSubmitted] = useState(false);
   const [userAnswers, setUserAnswers] = useState([]);
   const [isFinished, setIsFinished] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setIsLoading(true);
+    setLoadError(null);
+    loadSubbabContent(subbabId, userId)
+      .then((data) => {
+        if (!cancelled) setQuestions(prepareQuestions(data.quiz || []));
+      })
+      .catch((err) => {
+        if (!cancelled) setLoadError(err.message || 'Gagal memuat kuis.');
+      })
+      .finally(() => {
+        if (!cancelled) setIsLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [subbabId, userId]);
+
+  if (isLoading) {
+    return (
+      <div className="container animate-fade-in" style={{ paddingTop: '4rem', textAlign: 'center' }}>
+        <Loader2 size={32} color="var(--primary-teal)" />
+        <p style={{ color: 'var(--text-secondary)', marginTop: '1rem' }}>Memuat latihan soal...</p>
+      </div>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <div className="container animate-fade-in" style={{ paddingTop: '3rem', textAlign: 'center' }}>
+        <div className="card-white" style={{ maxWidth: 500, margin: '0 auto', padding: '3rem' }}>
+          <Lock size={40} color="var(--primary-teal)" style={{ marginBottom: '1rem' }} />
+          <h3>Latihan Soal Belum Bisa Dibuka</h3>
+          <p style={{ color: 'var(--text-secondary)', margin: '1rem 0' }}>{loadError}</p>
+          <button onClick={onBackToReader} className="btn-primary-teal">Kembali</button>
+        </div>
+      </div>
+    );
+  }
 
   if (!questions || questions.length === 0) {
     return (
@@ -62,7 +132,7 @@ export default function QuizEngine({ subjectId, subbabId, subjects, onBackToRead
       if (score >= 70) {
         try { confetti({ particleCount: 100, spread: 70, origin: { y: 0.6 } }); } catch (e) {}
       }
-      onFinishQuiz(score);
+      onFinishQuiz({ subjectId, subbabId, subbabTitle: subbab?.title || subbabId, score });
     }
   };
 

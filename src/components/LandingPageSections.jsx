@@ -195,19 +195,6 @@ export default function LandingPageSections({ onOpenAuth }) {
         </div>
       </section>
 
-      {/* Footer */}
-      <footer id="tentang" style={{ marginTop: '5rem', borderTop: '1px solid var(--border-light)', paddingTop: '2.5rem', color: 'var(--text-secondary)', fontSize: '0.88rem' }}>
-        <div className="container" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
-          <div>
-            <strong>Lentera Belajar</strong> &copy; 2026 — Inisiatif Platform Belajar Offline-First SMA/SMK Indonesia.
-          </div>
-          <div style={{ display: 'flex', gap: '1.5rem' }}>
-            <a href="#mentor" style={{ color: 'inherit', textDecoration: 'none' }}>Panduan Penggunaan</a>
-            <a href="#mapel" style={{ color: 'inherit', textDecoration: 'none' }}>Buku Kurikulum Merdeka</a>
-            <a href="#tentang" style={{ color: 'inherit', textDecoration: 'none' }}>Tentang Kami</a>
-          </div>
-        </div>
-      </footer>
 
     </div>
   );

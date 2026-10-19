@@ -36,7 +36,6 @@ export default function HeroReference({ onOpenAuth, onSelectClass, onNavigateTab
               <li><a href="#beranda" className="nav-link-item active" onClick={() => setIsMobileMenuOpen(false)}>Beranda</a></li>
               <li><a href="#mapel" className="nav-link-item" onClick={() => setIsMobileMenuOpen(false)}>Mata Pelajaran</a></li>
               <li><a href="#mentor" className="nav-link-item" onClick={() => setIsMobileMenuOpen(false)}>Tanya Mentor</a></li>
-              <li><a href="#tentang" className="nav-link-item" onClick={() => setIsMobileMenuOpen(false)}>Tentang</a></li>
             </ul>
           </nav>
 
@@ -195,15 +194,6 @@ export default function HeroReference({ onOpenAuth, onSelectClass, onNavigateTab
             </div>
           </div>
 
-        </div>
-
-        {/* Bottom Left Pagination Dots Decoration (Matching Reference Image) */}
-        <div className="hero-card-dots">
-          <div className="dot-item active"></div>
-          <div className="dot-item"></div>
-          <div className="dot-item"></div>
-          <div className="dot-item"></div>
-          <div className="dot-item"></div>
         </div>
 
       </div>

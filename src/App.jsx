@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import NetworkSimulator from './components/NetworkSimulator';
 import HeroReference from './components/HeroReference';
 import LandingPageSections from './components/LandingPageSections';
+import Footer from './components/Footer';
 import AuthModal from './components/AuthModal';
 import OnboardingModal from './components/OnboardingModal';
 import Dashboard from './components/Dashboard';
@@ -12,15 +13,16 @@ import MentorQA from './components/MentorQA';
 import StatisticsView from './components/StatisticsView';
 import BottomNav from './components/BottomNav';
 
-import { SUBJECTS_DATA, INITIAL_USER_STATS } from './data/learningData';
+import { SUBJECTS_DATA } from './data/learningData';
 import { LogOut } from 'lucide-react';
 import BrandLogo from './components/BrandLogo';
 import { auth, db } from './firebase';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
 import {
-  doc, getDoc, collection, query, orderBy,
+  doc, getDoc, collection, query, orderBy, where,
   onSnapshot, addDoc, updateDoc, serverTimestamp,
 } from 'firebase/firestore';
+import { getDownloadedIds, downloadSubbabContent, removeSubbabDownload } from './contentStore';
 
 export default function App() {
   // Network Simulator & Real Device Network Detection
@@ -103,9 +105,27 @@ export default function App() {
   const [activeReaderParams, setActiveReaderParams] = useState({ subjectId: 'matematika', subbabId: 'mat-10-1-1' });
 
   // Data Store State
-  const [subjects, setSubjects] = useState(SUBJECTS_DATA);
+  // 'subjects' sekarang hanya berisi katalog (judul, ringkasan, estimasi waktu) -
+  // isi materi & quiz lengkap diambil terpisah per-subbab lewat contentStore.js,
+  // supaya benar-benar perlu diunduh dulu sebelum bisa dibaca (lihat di bawah).
+  const [subjects] = useState(SUBJECTS_DATA);
   const [mentorThreads, setMentorThreads] = useState([]);
-  const [userStats, setUserStats] = useState(INITIAL_USER_STATS);
+
+  // Hasil kuis sungguhan milik user ini, dari Firestore (koleksi 'quizResults').
+  // Statistik di StatisticsView dihitung (derive) dari data mentah ini -
+  // bukan angka dummy lagi.
+  const [quizResults, setQuizResults] = useState([]);
+
+  // Status unduhan per-subbab (Set berisi subbabId). Sumber kebenarannya
+  // localStorage (lewat contentStore.js), bukan field statis di learningData.js -
+  // supaya status ini nyata: hanya subbab yang benar-benar pernah berhasil
+  // di-fetch dari Firestore saat online yang dianggap "siap dibaca offline".
+  const [downloadedIds, setDownloadedIds] = useState(new Set());
+  const [downloadBusyId, setDownloadBusyId] = useState(null);
+
+  useEffect(() => {
+    setDownloadedIds(user?.uid ? getDownloadedIds(user.uid) : new Set());
+  }, [user?.uid]);
 
   // Dengarkan koleksi 'mentorThreads' di Firestore secara real-time.
   // onSnapshot otomatis mengirim ulang data setiap kali ada thread baru
@@ -127,6 +147,93 @@ export default function App() {
 
     return () => unsubscribe();
   }, [user]);
+
+  // Dengarkan hasil kuis milik user ini secara real-time (koleksi 'quizResults'),
+  // dasar untuk semua angka di tab Statistik - bukan data dummy lagi.
+  useEffect(() => {
+    if (!user) {
+      setQuizResults([]);
+      return;
+    }
+
+    setQuizResults([]);
+    const resultsQuery = query(collection(db, 'quizResults'), where('uid', '==', user.uid));
+
+    const unsubscribe = onSnapshot(resultsQuery, (snapshot) => {
+      setQuizResults(snapshot.docs.map((d) => ({ id: d.id, ...d.data() })));
+    }, (err) => {
+      console.error('Gagal mendengarkan quizResults:', err);
+    });
+
+    return () => unsubscribe();
+  }, [user]);
+
+  // Turunkan (derive) statistik asli dari quizResults + status unduhan asli -
+  // tidak ada lagi angka yang di-hardcode. Dipakai oleh StatisticsView.
+  const userStats = React.useMemo(() => {
+    // Skor terbaik per subbab (biar nilai akhir mencerminkan pemahaman terbaik,
+    // bukan turun kalau user iseng coba-coba ulang dan dapat nilai jelek).
+    const bestScorePerSubbab = {};
+    quizResults.forEach(r => {
+      if (!bestScorePerSubbab[r.subbabId] || r.score > bestScorePerSubbab[r.subbabId]) {
+        bestScorePerSubbab[r.subbabId] = r.score;
+      }
+    });
+    const distinctSubbabIds = Object.keys(bestScorePerSubbab);
+    const completedSubbabs = distinctSubbabIds.length;
+    const avgQuizScore = completedSubbabs > 0
+      ? Math.round(distinctSubbabIds.reduce((sum, id) => sum + bestScorePerSubbab[id], 0) / completedSubbabs)
+      : 0;
+
+    // Progres per mapel: subbab unik yang pernah dikerjakan / total subbab di mapel itu.
+    const progressPerSubject = {};
+    subjects.forEach(subj => {
+      const totalInSubject = subj.classes.reduce((sum, cls) => sum + cls.chapters.reduce((s2, ch) => s2 + ch.subbabs.length, 0), 0);
+      const subbabIdsInSubject = new Set();
+      subj.classes.forEach(cls => cls.chapters.forEach(ch => ch.subbabs.forEach(sb => subbabIdsInSubject.add(sb.id))));
+      const completedInSubject = distinctSubbabIds.filter(id => subbabIdsInSubject.has(id)).length;
+      progressPerSubject[subj.id] = {
+        completed: completedInSubject,
+        total: totalInSubject,
+        pct: totalInSubject > 0 ? Math.round((completedInSubject / totalInSubject) * 100) : 0
+      };
+    });
+
+    // Aktivitas 7 hari terakhir: jumlah kuis yang dikerjakan per hari (dari completedAt).
+    const dayLabels = ['Min', 'Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab'];
+    const today = new Date();
+    const last7Days = [];
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date(today);
+      d.setDate(today.getDate() - i);
+      last7Days.push({ key: d.toDateString(), day: dayLabels[d.getDay()], quizCount: 0 });
+    }
+    quizResults.forEach(r => {
+      if (!r.completedAt?.toDate) return; // serverTimestamp belum resolve (baru saja offline) - lewati
+      const dKey = r.completedAt.toDate().toDateString();
+      const slot = last7Days.find(d => d.key === dKey);
+      if (slot) slot.quizCount += 1;
+    });
+
+    // Streak: jumlah hari berturut-turut (dari hari ini mundur) yang ada minimal 1 kuis.
+    let studyDaysStreak = 0;
+    for (let i = last7Days.length - 1; i >= 0; i--) {
+      if (last7Days[i].quizCount > 0) studyDaysStreak += 1;
+      else break;
+    }
+
+    // Kuis yang diselesaikan dalam 7 hari terakhir (pengganti teks "+2 modul minggu ini" yang dulu hardcode).
+    const completedLast7Days = last7Days.reduce((sum, d) => sum + d.quizCount, 0);
+
+    return {
+      completedSubbabs,
+      avgQuizScore,
+      completedLast7Days,
+      studyDaysStreak,
+      activityLast7Days: last7Days,
+      progressPerSubject,
+    };
+  }, [quizResults, subjects]);
 
   // Sync Queue Effect when Network becomes Online
   useEffect(() => {
@@ -178,27 +285,36 @@ export default function App() {
   };
 
   // Subbab & Download Handlers
-  const handleToggleSubbabDownload = (subjectId, subbabId, isDownloaded) => {
-    setSubjects(prevSubjects => {
-      return prevSubjects.map(subj => {
-        if (subj.id !== subjectId) return subj;
-        return {
-          ...subj,
-          classes: subj.classes.map(cls => ({
-            ...cls,
-            chapters: cls.chapters.map(chap => ({
-              ...chap,
-              subbabs: chap.subbabs.map(sb => sb.id === subbabId ? { ...sb, isDownloaded } : sb)
-            }))
-          }))
-        };
-      });
-    });
+  // Unduh = fetch sungguhan dari Firestore server (bukan sekadar toggle flag).
+  // Kalau gagal (biasanya karena offline), status TIDAK berubah jadi "terunduh" -
+  // beda dari versi lama yang selalu bilang "berhasil" tanpa benar-benar menyimpan apa pun.
+  const handleToggleSubbabDownload = async (subjectId, subbabId, wantDownload) => {
+    const uid = user?.uid;
+    if (!uid) return false;
 
-    if (isDownloaded) {
-      showToast('📥 Subbab berhasil diunduh dan tersimpan di HP!');
-    } else {
-      showToast('🗑️ Simpanan subbab telah dihapus.');
+    if (!wantDownload) {
+      removeSubbabDownload(subbabId, uid);
+      setDownloadedIds(getDownloadedIds(uid));
+      showToast('🗑️ Simpanan materi offline telah dihapus.');
+      return;
+    }
+
+    setDownloadBusyId(subbabId);
+    try {
+      await downloadSubbabContent(subbabId, uid);
+      if (auth.currentUser?.uid === uid) setDownloadedIds(getDownloadedIds(uid));
+      showToast('📥 Materi berhasil diunduh dan tersimpan untuk dibaca offline!');
+      return true;
+    } catch (err) {
+      console.error('Gagal mengunduh materi:', err);
+      showToast(
+        isOnline
+          ? '❌ Gagal mengunduh materi. Coba lagi.'
+          : '📡 Tidak ada koneksi internet - sambungkan dulu untuk mengunduh materi ini.'
+      );
+      return false;
+    } finally {
+      setDownloadBusyId(null);
     }
   };
 
@@ -214,12 +330,26 @@ export default function App() {
     window.scrollTo(0, 0);
   };
 
-  const handleFinishQuiz = (score) => {
-    setUserStats(prev => ({
-      ...prev,
-      completedSubbabs: prev.completedSubbabs + 1,
-      avgQuizScore: Math.round((prev.avgQuizScore + score) / 2)
-    }));
+  // Menyimpan hasil kuis sungguhan ke Firestore (koleksi 'quizResults') -
+  // ini sumber data asli untuk tab Statistik (lihat useMemo userStats di atas).
+  // Setiap percobaan kuis dicatat sebagai dokumen baru; skor TERBAIK per subbab
+  // yang dipakai untuk rata-rata, jadi coba-coba ulang tidak menurunkan nilai.
+  const handleFinishQuiz = async ({ subjectId, subbabId, subbabTitle, score }) => {
+    try {
+      await addDoc(collection(db, 'quizResults'), {
+        uid: user.uid,
+        subjectId,
+        subbabId,
+        subbabTitle,
+        score,
+        completedAt: serverTimestamp(),
+      });
+    } catch (err) {
+      console.error('Gagal menyimpan hasil kuis:', err);
+      // Tidak perlu toast error di sini - offline persistence Firestore akan
+      // tetap menyimpannya secara lokal & sinkron sendiri begitu online lagi,
+      // jadi kegagalan di titik ini jarang terjadi kecuali rules salah.
+    }
   };
 
   // Mentor Q&A Handlers
@@ -289,7 +419,6 @@ export default function App() {
       {!user && (
         <NetworkSimulator 
           isOnline={isOnline} 
-          setIsOnline={setIsOnline} 
           pendingSyncCount={pendingSyncCount} 
           triggerSync={triggerSync} 
         />
@@ -319,7 +448,7 @@ export default function App() {
       {/* Logged-in Header Navbar Bar */}
       {user && (
         <header style={{ background: 'white', borderBottom: '1px solid var(--border-light)', padding: '0.85rem 1.5rem', position: 'sticky', top: 0, zIndex: 1000 }}>
-          <div className="container" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'nowrap' }}>
+          <div className="container app-header-row" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             
             {/* Brand Logo (Click to go to Beranda Dashboard) */}
             <a href="#" onClick={(e) => { e.preventDefault(); setActiveTab('beranda'); }} style={{ textDecoration: 'none' }}>
@@ -330,14 +459,13 @@ export default function App() {
             <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
               <NetworkSimulator 
                 isOnline={isOnline} 
-                setIsOnline={setIsOnline} 
                 pendingSyncCount={pendingSyncCount} 
                 triggerSync={triggerSync} 
                 isEmbedded={true}
               />
 
               <span style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--primary-teal)', background: '#F0FDFA', border: '1px solid var(--border-mint)', padding: '0.35rem 0.85rem', borderRadius: 'var(--radius-pill)', whiteSpace: 'nowrap' }}>
-                {user.name} (Kelas {user.classLevel})
+                {user.name} <span className="user-badge-class-suffix">(Kelas {user.classLevel})</span>
               </span>
 
               <button 
@@ -376,6 +504,7 @@ export default function App() {
               onSelectClass={(cls) => setPreselectedClass(cls)}
             />
             <LandingPageSections onOpenAuth={handleOpenAuth} />
+            <Footer />
           </>
         )}
 
@@ -384,6 +513,8 @@ export default function App() {
           <Dashboard 
             user={user} 
             subjects={subjects} 
+            downloadedIds={downloadedIds}
+            userStats={userStats}
             onNavigateTab={setActiveTab} 
             onSelectSubbab={handleOpenReader} 
           />
@@ -393,8 +524,11 @@ export default function App() {
           <SubjectCatalog 
             subjects={subjects} 
             userClass={user.classLevel} 
+            downloadedIds={downloadedIds}
+            downloadBusyId={downloadBusyId}
             onSelectSubbab={handleOpenReader} 
             onToggleSubbabDownload={handleToggleSubbabDownload} 
+            onBlockedRead={() => showToast('🔒 Unduh dulu materinya sebelum bisa dibaca offline.')}
           />
         )}
 
@@ -402,7 +536,9 @@ export default function App() {
           <SubbabReader 
             subjectId={activeReaderParams.subjectId} 
             subbabId={activeReaderParams.subbabId} 
+            userId={user.uid}
             subjects={subjects} 
+            isDownloaded={downloadedIds.has(activeReaderParams.subbabId)}
             onBack={() => setActiveTab('mapel')} 
             onStartQuiz={handleStartQuiz} 
             onAskMentor={handleAskMentor} 
@@ -413,6 +549,7 @@ export default function App() {
           <QuizEngine 
             subjectId={activeReaderParams.subjectId} 
             subbabId={activeReaderParams.subbabId} 
+            userId={user.uid}
             subjects={subjects} 
             onBackToReader={() => setActiveTab('reader')} 
             onFinishQuiz={handleFinishQuiz} 
@@ -432,6 +569,7 @@ export default function App() {
           <StatisticsView 
             userStats={userStats} 
             subjects={subjects} 
+            downloadedCount={downloadedIds.size}
           />
         )}
 

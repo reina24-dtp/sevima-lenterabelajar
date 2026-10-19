@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { BookOpen, DownloadCloud, CheckCircle2, ChevronRight, Download, Clock, ArrowRight } from 'lucide-react';
 
-export default function SubjectCatalog({ subjects, userClass, onSelectSubbab, onToggleSubbabDownload }) {
+export default function SubjectCatalog({ subjects, userClass, downloadedIds, downloadBusyId, onSelectSubbab, onToggleSubbabDownload, onBlockedRead }) {
   const [selectedClassTab, setSelectedClassTab] = useState(userClass || 10);
   const [selectedSubjectId, setSelectedSubjectId] = useState(subjects[0]?.id || 'matematika');
   const [downloadingChapterId, setDownloadingChapterId] = useState(null);
@@ -10,24 +10,41 @@ export default function SubjectCatalog({ subjects, userClass, onSelectSubbab, on
   const currentSubject = subjects.find(s => s.id === selectedSubjectId) || subjects[0];
   const classContent = currentSubject?.classes?.find(c => c.classLevel === selectedClassTab) || currentSubject?.classes[0];
 
-  const handleBatchDownload = (chapter) => {
-    setDownloadingChapterId(chapter.id);
-    setDownloadProgress(20);
+  const isDownloaded = (subbabId) => downloadedIds?.has(subbabId);
 
-    const interval = setInterval(() => {
-      setDownloadProgress((prev) => {
-        if (prev >= 100) {
-          clearInterval(interval);
-          setDownloadingChapterId(null);
-          // Mark subbabs in chapter as downloaded
-          chapter.subbabs.forEach(sb => {
-            onToggleSubbabDownload(selectedSubjectId, sb.id, true);
-          });
-          return 0;
-        }
-        return prev + 25;
-      });
-    }, 300);
+  // Unduh semua subbab dalam satu bab secara berurutan (satu per satu, lewat
+  // Firestore sungguhan). Progress bar mencerminkan jumlah subbab yang
+  // SUDAH BERHASIL diunduh, bukan animasi palsu - dan berhenti lebih awal
+  // kalau salah satu gagal (misalnya koneksi putus di tengah jalan).
+  const handleBatchDownload = async (chapter) => {
+    setDownloadingChapterId(chapter.id);
+    setDownloadProgress(0);
+
+    const total = chapter.subbabs.length;
+    let done = 0;
+
+    for (const sb of chapter.subbabs) {
+      if (isDownloaded(sb.id)) {
+        done += 1;
+        setDownloadProgress(Math.round((done / total) * 100));
+        continue;
+      }
+      const success = await onToggleSubbabDownload(selectedSubjectId, sb.id, true);
+      if (!success) break; // berhenti kalau gagal (mis. offline) - jangan klaim semua selesai
+      done += 1;
+      setDownloadProgress(Math.round((done / total) * 100));
+    }
+
+    setDownloadingChapterId(null);
+    setDownloadProgress(0);
+  };
+
+  const handleReadClick = (subbabId) => {
+    if (isDownloaded(subbabId)) {
+      onSelectSubbab(selectedSubjectId, subbabId);
+    } else {
+      onBlockedRead?.();
+    }
   };
 
   return (
@@ -96,7 +113,7 @@ export default function SubjectCatalog({ subjects, userClass, onSelectSubbab, on
       {/* Chapters & Subbab Breakdown */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: '2rem' }}>
         {classContent?.chapters?.map((chapter) => {
-          const allDownloaded = chapter.subbabs.every(s => s.isDownloaded);
+          const allDownloaded = chapter.subbabs.every(s => isDownloaded(s.id));
 
           return (
             <div key={chapter.id} className="card-white" style={{ padding: '2rem' }}>
@@ -142,13 +159,16 @@ export default function SubjectCatalog({ subjects, userClass, onSelectSubbab, on
 
               {/* Subbab List Cards */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                {chapter.subbabs.map((subbab) => (
+                {chapter.subbabs.map((subbab) => {
+                  const downloaded = isDownloaded(subbab.id);
+                  const isBusy = downloadBusyId === subbab.id;
+                  return (
                   <div
                     key={subbab.id}
                     style={{
-                      background: subbab.isDownloaded ? '#F0FDFA' : '#F8FAFC',
+                      background: downloaded ? '#F0FDFA' : '#F8FAFC',
                       border: '1px solid',
-                      borderColor: subbab.isDownloaded ? 'var(--border-mint)' : 'var(--border-light)',
+                      borderColor: downloaded ? 'var(--border-mint)' : 'var(--border-light)',
                       borderRadius: 'var(--radius-md)',
                       padding: '1.25rem 1.5rem',
                       display: 'flex',
@@ -163,13 +183,13 @@ export default function SubjectCatalog({ subjects, userClass, onSelectSubbab, on
                         <h3 style={{ fontSize: '1.05rem', fontWeight: 700, color: 'var(--text-primary)' }}>
                           {subbab.title}
                         </h3>
-                        {subbab.isDownloaded ? (
+                        {downloaded ? (
                           <span className="badge-status badge-downloaded">
                             <DownloadCloud size={13} /> Offline Ready
                           </span>
                         ) : (
                           <span className="badge-status badge-pending">
-                            Perlu Unduh
+                            🔒 Perlu Unduh
                           </span>
                         )}
                       </div>
@@ -184,29 +204,39 @@ export default function SubjectCatalog({ subjects, userClass, onSelectSubbab, on
 
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
                       <button
-                        onClick={() => onToggleSubbabDownload(selectedSubjectId, subbab.id, !subbab.isDownloaded)}
+                        onClick={() => onToggleSubbabDownload(selectedSubjectId, subbab.id, !downloaded)}
+                        disabled={isBusy}
                         style={{
                           padding: '0.5rem',
                           borderRadius: '50%',
-                          backgroundColor: subbab.isDownloaded ? '#D1FAE5' : '#E2E8F0',
-                          color: subbab.isDownloaded ? '#059669' : '#64748B'
+                          backgroundColor: downloaded ? '#D1FAE5' : '#E2E8F0',
+                          color: downloaded ? '#059669' : '#64748B',
+                          opacity: isBusy ? 0.5 : 1,
+                          cursor: isBusy ? 'wait' : 'pointer'
                         }}
-                        title={subbab.isDownloaded ? "Hapus simpanan lokal" : "Unduh ke HP"}
+                        title={downloaded ? "Hapus simpanan lokal" : "Unduh ke HP"}
                       >
                         <DownloadCloud size={18} />
                       </button>
 
                       <button
-                        onClick={() => onSelectSubbab(selectedSubjectId, subbab.id)}
-                        className="btn-primary-teal"
-                        style={{ padding: '0.55rem 1.25rem', fontSize: '0.88rem' }}
+                        onClick={() => handleReadClick(subbab.id)}
+                        className={downloaded ? 'btn-primary-teal' : 'btn-outline'}
+                        style={{
+                          padding: '0.55rem 1.25rem',
+                          fontSize: '0.88rem',
+                          opacity: downloaded ? 1 : 0.6,
+                          cursor: downloaded ? 'pointer' : 'not-allowed'
+                        }}
+                        title={downloaded ? undefined : 'Unduh dulu untuk membaca'}
                       >
-                        Baca Materi <ArrowRight size={16} />
+                        {downloaded ? <>Baca Materi <ArrowRight size={16} /></> : <>🔒 Terkunci</>}
                       </button>
                     </div>
 
                   </div>
-                ))}
+                  );
+                })}
               </div>
 
             </div>

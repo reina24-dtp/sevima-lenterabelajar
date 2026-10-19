@@ -1,10 +1,14 @@
 import React, { useState, useEffect } from 'react';
-import { DownloadCloud, Clock, ArrowLeft, CheckSquare, MessageSquare, BookOpen, Bookmark, Sparkles, CheckCircle2 } from 'lucide-react';
+import { DownloadCloud, Clock, ArrowLeft, CheckSquare, MessageSquare, BookOpen, Bookmark, Sparkles, CheckCircle2, Lock, Loader2 } from 'lucide-react';
+import { loadSubbabContent } from '../contentStore';
 
-export default function SubbabReader({ subjectId, subbabId, subjects, onBack, onStartQuiz, onAskMentor }) {
+export default function SubbabReader({ subjectId, subbabId, userId, subjects, isDownloaded, onBack, onStartQuiz, onAskMentor }) {
   const [scrollProgress, setScrollProgress] = useState(0);
+  const [body, setBody] = useState(null); // { contentBlocks, quiz }
+  const [loadError, setLoadError] = useState(null);
+  const [isLoading, setIsLoading] = useState(true);
 
-  // Find subject & subbab
+  // Find subject & subbab (metadata only - judul, ringkasan, keyPoints)
   const subject = subjects.find(s => s.id === subjectId) || subjects[0];
   let foundSubbab = null;
   let foundChapter = null;
@@ -22,6 +26,29 @@ export default function SubbabReader({ subjectId, subbabId, subjects, onBack, on
 
   const subbab = foundSubbab || subject.classes[0].chapters[0].subbabs[0];
 
+  // Isi materi (contentBlocks) diambil dari Firestore - hanya berhasil kalau
+  // subbab ini sudah diunduh sebelumnya (lihat contentStore.js: loadSubbabContent
+  // menolak kalau belum pernah diunduh, dan otomatis pakai cache lokal saat offline).
+  useEffect(() => {
+    let cancelled = false;
+    setIsLoading(true);
+    setLoadError(null);
+    setBody(null);
+
+    loadSubbabContent(subbab.id, userId)
+      .then((data) => {
+        if (!cancelled) setBody(data);
+      })
+      .catch((err) => {
+        if (!cancelled) setLoadError(err.message || 'Gagal memuat materi.');
+      })
+      .finally(() => {
+        if (!cancelled) setIsLoading(false);
+      });
+
+    return () => { cancelled = true; };
+  }, [subbab.id, userId]);
+
   useEffect(() => {
     const handleScroll = () => {
       const totalHeight = document.documentElement.scrollHeight - window.innerHeight;
@@ -33,6 +60,32 @@ export default function SubbabReader({ subjectId, subbabId, subjects, onBack, on
     window.addEventListener('scroll', handleScroll);
     return () => window.removeEventListener('scroll', handleScroll);
   }, []);
+
+  if (isLoading) {
+    return (
+      <div className="container animate-fade-in" style={{ paddingTop: '4rem', textAlign: 'center' }}>
+        <Loader2 size={32} className="animate-spin" color="var(--primary-teal)" />
+        <p style={{ color: 'var(--text-secondary)', marginTop: '1rem' }}>Memuat materi...</p>
+      </div>
+    );
+  }
+
+  if (loadError || !body) {
+    return (
+      <div className="container animate-fade-in" style={{ paddingTop: '3rem', textAlign: 'center' }}>
+        <div className="card-white" style={{ maxWidth: 480, margin: '0 auto', padding: '3rem' }}>
+          <Lock size={40} color="var(--primary-teal)" style={{ marginBottom: '1rem' }} />
+          <h3 style={{ marginBottom: '0.5rem' }}>Materi Belum Bisa Dibuka</h3>
+          <p style={{ color: 'var(--text-secondary)', margin: '0.5rem 0 1.5rem' }}>
+            {loadError || 'Subbab ini belum diunduh. Unduh dulu saat online agar bisa dibaca offline.'}
+          </p>
+          <button onClick={onBack} className="btn-primary-teal">
+            <ArrowLeft size={16} /> Kembali ke Daftar Subbab
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div style={{ paddingBottom: '7rem', color: '#0F172A' }}>
@@ -51,12 +104,12 @@ export default function SubbabReader({ subjectId, subbabId, subjects, onBack, on
           </button>
 
           <span className="badge-status badge-downloaded" style={{ fontSize: '0.85rem', padding: '0.4rem 0.9rem' }}>
-            <DownloadCloud size={14} /> Tersimpan (Offline Ready)
+            <DownloadCloud size={14} /> {isDownloaded ? 'Tersimpan (Offline Ready)' : 'Dimuat dari Server'}
           </span>
         </div>
 
         {/* Article Header Card */}
-        <div className="card-white" style={{ marginBottom: '2rem', borderTop: '5px solid var(--primary-teal)', padding: '2.5rem' }}>
+        <div className="card-white subbab-reader-header-card" style={{ marginBottom: '2rem', borderTop: '5px solid var(--primary-teal)', padding: '2.5rem' }}>
           <div style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--primary-teal)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.4rem' }}>
             {subject.title} • {foundChapter?.title || 'Bab 1'}
           </div>
@@ -85,7 +138,7 @@ export default function SubbabReader({ subjectId, subbabId, subjects, onBack, on
         </div>
 
         {/* Content Body Container */}
-        <div style={{ background: 'white', padding: '3rem 2.75rem', borderRadius: 'var(--radius-md)', boxShadow: 'var(--shadow-md)', marginBottom: '2.5rem' }}>
+        <div className="subbab-reader-card" style={{ background: 'white', padding: '3rem 2.75rem', borderRadius: 'var(--radius-md)', boxShadow: 'var(--shadow-md)', marginBottom: '2.5rem' }}>
           
           {/* Key Points Bullet List */}
           {subbab.keyPoints && subbab.keyPoints.length > 0 && (
@@ -101,8 +154,8 @@ export default function SubbabReader({ subjectId, subbabId, subjects, onBack, on
             </div>
           )}
 
-          {/* Render Content Blocks */}
-          {subbab.contentBlocks && subbab.contentBlocks.map((block, idx) => {
+          {/* Render Content Blocks (dari Firestore, lihat useEffect di atas) */}
+          {body.contentBlocks && body.contentBlocks.map((block, idx) => {
             if (block.type === 'sectionTitle') {
               return (
                 <h2 key={idx} style={{ fontFamily: 'var(--font-heading)', fontSize: '1.45rem', fontWeight: 800, color: '#0F172A', marginTop: '2.5rem', marginBottom: '1rem', borderBottom: '2px solid #F1F5F9', paddingBottom: '0.5rem' }}>

@@ -347,7 +347,7 @@ export default function AuthModal({ isOpen, onClose, initialMode = 'register', p
                 </div>
               </div>
 
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.85rem' }}>
+              <div className="auth-two-col" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.85rem' }}>
                 <div>
                   <label htmlFor="auth-region" style={{ display: 'block', fontSize: '0.82rem', fontWeight: 700, marginBottom: '0.3rem', color: 'var(--text-primary)' }}>
                     Asal Wilayah <span style={{ fontWeight: 400, color: 'var(--text-muted)' }}>(Opsional)</span>

@@ -1,9 +1,17 @@
 import React from 'react';
-import { Flame, BookOpen, CheckCircle2, DownloadCloud, ArrowRight, Zap, Award, Sparkles, Wifi } from 'lucide-react';
+import { Flame, BookOpen, DownloadCloud, ArrowRight, Sparkles } from 'lucide-react';
 
-export default function Dashboard({ user, subjects, onNavigateTab, onSelectSubbab }) {
-  // Find currently active subbab shortcut
-  const activeSubbab = subjects[0]?.classes[0]?.chapters[0]?.subbabs[0];
+export default function Dashboard({ user, subjects, downloadedIds, userStats, onNavigateTab, onSelectSubbab }) {
+  const availableSubbabs = subjects.flatMap((subject) => {
+    const classData = subject.classes.find(c => c.classLevel === (user?.classLevel || 10)) || subject.classes[0];
+    return (classData?.chapters || []).flatMap(chapter =>
+      chapter.subbabs.map(subbab => ({ subject, classData, subbab }))
+    );
+  });
+  const activeMaterial = availableSubbabs.find(item => downloadedIds?.has(item.subbab.id)) || availableSubbabs[0];
+  const isActiveMaterialDownloaded = activeMaterial && downloadedIds?.has(activeMaterial.subbab.id);
+  const downloadedCount = downloadedIds?.size || 0;
+  const studyDaysStreak = userStats?.studyDaysStreak || 0;
 
   return (
     <div className="container animate-fade-in" style={{ padding: '2rem 1.5rem 6rem 1.5rem' }}>
@@ -28,21 +36,23 @@ export default function Dashboard({ user, subjects, onNavigateTab, onSelectSubba
               Halo, {user?.name || 'Siswa Lentera'}! 👋
             </h1>
             <p style={{ opacity: 0.9, marginTop: '0.4rem', fontSize: '0.98rem' }}>
-              Siap belajar hari ini? <strong>4 modul</strong> sudah tersimpan rapi dan siap dibaca tanpa internet.
+              {downloadedCount > 0
+                ? <>Ada <strong>{downloadedCount} modul</strong> tersimpan dan siap dibaca tanpa internet.</>
+                : 'Belum ada materi yang tersimpan offline. Pilih materi untuk mulai belajar.'}
             </p>
           </div>
 
           <div style={{ display: 'flex', gap: '1rem' }}>
             <div style={{ background: 'rgba(255,255,255,0.15)', padding: '0.85rem 1.25rem', borderRadius: 'var(--radius-md)', textAlign: 'center', backdropFilter: 'blur(4px)' }}>
               <div style={{ fontSize: '1.4rem', fontWeight: 800, color: '#F59E0B', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.3rem' }}>
-                <Flame size={20} fill="#F59E0B" /> 5 Hari
+                <Flame size={20} fill="#F59E0B" /> {studyDaysStreak} Hari
               </div>
               <div style={{ fontSize: '0.75rem', opacity: 0.85, fontWeight: 600 }}>Streak Belajar</div>
             </div>
 
             <div style={{ background: 'rgba(255,255,255,0.15)', padding: '0.85rem 1.25rem', borderRadius: 'var(--radius-md)', textAlign: 'center', backdropFilter: 'blur(4px)' }}>
               <div style={{ fontSize: '1.4rem', fontWeight: 800, color: '#10B981', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.3rem' }}>
-                <DownloadCloud size={20} /> 4 Modul
+                <DownloadCloud size={20} /> {downloadedCount} Modul
               </div>
               <div style={{ fontSize: '0.75rem', opacity: 0.85, fontWeight: 600 }}>Tersimpan Offline</div>
             </div>
@@ -50,30 +60,32 @@ export default function Dashboard({ user, subjects, onNavigateTab, onSelectSubba
         </div>
       </div>
 
-      {/* Shortcut Card: Terakhir Dipelajari */}
-      {activeSubbab && (
+      {/* Material shortcut reflects the actual offline download state. */}
+      {activeMaterial && (
         <div style={{ marginBottom: '2.5rem' }}>
           <h2 style={{ fontFamily: 'var(--font-heading)', fontSize: '1.35rem', fontWeight: 800, marginBottom: '1rem', color: 'var(--text-primary)' }}>
-            📌 Lanjutkan Belajar
+            {isActiveMaterialDownloaded ? '📌 Materi Tersimpan' : '📌 Mulai Belajar'}
           </h2>
           <div className="card-white" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1.5rem', borderLeft: '5px solid var(--primary-teal)' }}>
             <div>
-              <span className="badge-status badge-downloaded" style={{ marginBottom: '0.5rem' }}>
-                <DownloadCloud size={14} /> Tersimpan Offline
+              <span className="badge-status" style={{ marginBottom: '0.5rem', ...(isActiveMaterialDownloaded ? { backgroundColor: 'var(--status-downloaded-bg)', color: 'var(--status-downloaded)' } : { backgroundColor: '#F1F5F9', color: 'var(--text-secondary)' }) }}>
+                {isActiveMaterialDownloaded ? <><DownloadCloud size={14} /> Tersimpan Offline</> : 'Belum diunduh'}
               </span>
               <h3 style={{ fontSize: '1.15rem', fontWeight: 700, margin: '0.2rem 0' }}>
-                {activeSubbab.title}
+                {activeMaterial.subbab.title}
               </h3>
               <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-                Matematika Kelas 10 • Estimasi baca {activeSubbab.estimatedTime}
+                {activeMaterial.subject.title} Kelas {activeMaterial.classData.classLevel} • Estimasi baca {activeMaterial.subbab.estimatedTime}
               </p>
             </div>
 
             <button 
-              onClick={() => onSelectSubbab('matematika', activeSubbab.id)} 
+              onClick={() => isActiveMaterialDownloaded
+                ? onSelectSubbab(activeMaterial.subject.id, activeMaterial.subbab.id)
+                : onNavigateTab('mapel')}
               className="btn-primary-teal"
             >
-              Buka Materi Offline <ArrowRight size={16} />
+              {isActiveMaterialDownloaded ? 'Buka Materi Offline' : 'Pilih & Unduh Materi'} <ArrowRight size={16} />
             </button>
           </div>
         </div>
@@ -93,14 +105,17 @@ export default function Dashboard({ user, subjects, onNavigateTab, onSelectSubba
         <div className="grid-3">
           {subjects.map((subj) => {
             const classData = subj.classes.find(c => c.classLevel === (user?.classLevel || 10)) || subj.classes[0];
+            const subjectDownloadedCount = classData?.chapters
+              ?.flatMap(chapter => chapter.subbabs)
+              .filter(subbab => downloadedIds?.has(subbab.id)).length || 0;
             return (
               <div key={subj.id} className="card-white">
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1rem' }}>
                   <div style={{ width: 42, height: 42, borderRadius: 10, backgroundColor: subj.bgColor, color: subj.color, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                     <BookOpen size={22} />
                   </div>
-                  <span className="badge-status badge-downloaded">
-                    <CheckCircle2 size={12} /> Ready
+                  <span className="badge-status" style={subjectDownloadedCount > 0 ? { backgroundColor: 'var(--status-downloaded-bg)', color: 'var(--status-downloaded)' } : { backgroundColor: '#F1F5F9', color: 'var(--text-secondary)' }}>
+                    <DownloadCloud size={12} /> {subjectDownloadedCount > 0 ? `${subjectDownloadedCount} Tersimpan` : 'Belum Diunduh'}
                   </span>
                 </div>
 

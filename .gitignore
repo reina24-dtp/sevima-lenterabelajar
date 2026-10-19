@@ -16,6 +16,9 @@ dist-ssr
 .env
 .env.local
 
+# Firebase Admin service account key (JANGAN di-commit, kredensial sensitif)
+scripts/serviceAccountKey.json
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
